@@ -227,6 +227,8 @@ history_manager = HistoryManager()
 
 if 'show_ferm_details' not in st.session_state:
     st.session_state.show_ferm_details = True
+if 'analysis_result' not in st.session_state:
+    st.session_state.analysis_result = None
 
 with st.sidebar:
     selected_tab = st.radio(
@@ -728,6 +730,237 @@ def display_ferm_tab_content(entry_or_result):
                         st.markdown(f'<div class="history-artifact-container"><img src="{img_data_b64}" alt="{title}"></div>', unsafe_allow_html=True)
 
 
+# Helper to display the analysis results tabs so they can be rerendered
+def display_analysis_result(result, baseline_result=None):
+    """Tampilkan tab hasil analisis setelah pipeline selesai."""
+    st.success("Analisis selesai. Hasil ditampilkan di bawah ini.")
+
+    tab_titles = [
+        "📄 **Tahap 1: Akuisisi & K-Means**",
+        "📊 **Tahap 2: Analisis Temporal**",
+        "🔬 **Tahap 3: Investigasi**",
+        "📈 **Tahap 4: Visualisasi & Lokalisasi**",
+        "🧠 **Analisis FERM**",
+        "📥 **Tahap 5: Laporan**",
+    ]
+    tabs = st.tabs(tab_titles)
+
+    with tabs[0]:
+        st.header("Hasil Tahap 1: Akuisisi & Ekstraksi Fitur Dasar")
+        st.info(
+            "Tujuan: Mengamankan bukti, mengekstrak metadata, menormalisasi frame, dan menerapkan **Metode Utama K-Means** untuk mengklasifikasikan adegan video.",
+            icon="🛡️",
+        )
+        st.subheader("1.1. Identifikasi dan Preservasi Bukti")
+        c1, c2 = st.columns(2)
+        c1.metric("Total Frame Dianalisis", result.summary.get("total_frames", "T/A"))
+        c2.write("**Hash Integritas (SHA-256)**"); c2.code(result.preservation_hash, language="bash")
+        with st.expander("Tampilkan Metadata Video Lengkap"):
+            for category, items in result.metadata.items():
+                st.write(f"**{category}**")
+                df = pd.DataFrame.from_dict(items, orient="index", columns=["Value"])
+                st.table(df)
+        st.subheader("1.2. Ekstraksi dan Normalisasi Frame")
+        st.write("Setiap frame diekstrak dan dinormalisasi untuk konsistensi analisis.")
+        if result.frames and hasattr(result.frames[0], "comparison_bytes") and result.frames[0].comparison_bytes:
+            st.image(result.frames[0].comparison_bytes, caption="Kiri: Original, Kanan: Normalized (Contrast-Enhanced)")
+        st.subheader("1.3. Hasil Detail Analisis K-Means")
+        st.write(
+            f"Frame-frame dikelompokkan ke dalam **{len(result.kmeans_artifacts.get('clusters', []))} klaster** berdasarkan kemiripan warna."
+        )
+        if result.kmeans_artifacts.get("distribution_plot_bytes"):
+            st.image(result.kmeans_artifacts["distribution_plot_bytes"], caption="Distribusi jumlah frame untuk setiap klaster warna.")
+        st.write("**Eksplorasi Setiap Klaster:**")
+        if result.kmeans_artifacts.get("clusters"):
+            cluster_tabs = st.tabs([f"Klaster {c['id']}" for c in result.kmeans_artifacts.get("clusters", [])])
+            for i, cluster_tab in enumerate(cluster_tabs):
+                with cluster_tab:
+                    cluster_data = result.kmeans_artifacts["clusters"][i]
+                    st.metric("Jumlah Frame dalam Klaster Ini", f"{cluster_data['count']}")
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.write("**Palet Warna Dominan**")
+                        if cluster_data.get("palette_bytes"):
+                            st.image(cluster_data["palette_bytes"])
+                    with c2:
+                        st.write("**Contoh Frame dari Klaster Ini (Gambar Asli)**")
+                        if cluster_data.get("samples_montage_bytes"):
+                            st.image(cluster_data["samples_montage_bytes"])
+        else:
+            st.warning("Tidak ada data klaster K-Means yang dapat ditampilkan.")
+
+    with tabs[1]:
+        st.header("Hasil Tahap 2: Analisis Anomali Temporal")
+        st.info(
+            "Tujuan: Menganalisis hubungan antar frame berurutan untuk mendeteksi diskontinuitas.",
+            icon="📈",
+        )
+        st.subheader("2.1. Visualisasi Klasterisasi Warna K-Means (Sepanjang Waktu)")
+        st.write(
+            "Plot ini menunjukkan bagaimana setiap frame dikelompokkan ke dalam klaster warna tertentu. Lompatan yang tajam sering mengindikasikan perubahan adegan yang mendadak."
+        )
+        if result.plots.get("kmeans_temporal_bytes"):
+            st.image(result.plots["kmeans_temporal_bytes"], caption="Lompatan vertikal yang tajam menandakan perubahan adegan mendadak.")
+        st.subheader("2.2. Analisis Skor SSIM (Structural Similarity Index)")
+        st.write(
+            "SSIM mengukur kemiripan struktural antara dua gambar. Penurunan drastis pada skor SSIM merupakan indikator kuat adanya diskontinuitas."
+        )
+        if result.plots.get("ssim_temporal_bytes"):
+            st.image(result.plots["ssim_temporal_bytes"], caption="Penurunan tajam mengindikasikan diskontinuitas.")
+        st.subheader("2.3. Analisis Magnitudo Aliran Optik")
+        st.write(
+            "Aliran Optik mengukur gerakan piksel antar frame. Lonjakan besar dapat mengindikasikan perubahan adegan yang tiba-tiba atau transisi paksa."
+        )
+        if result.plots.get("optical_flow_temporal_bytes"):
+            st.image(result.plots["optical_flow_temporal_bytes"], caption="Lonjakan menunjukkan perubahan mendadak atau pergerakan tidak wajar.")
+        st.subheader("2.4. Distribusi Metrik Anomali")
+        st.write(
+            "Histogram ini menunjukkan distribusi keseluruhan skor SSIM dan pergerakan Aliran Optik. Ini membantu mengidentifikasi apakah nilai-nilai anomali benar-benar menonjol dari perilaku normal video."
+        )
+        if result.plots.get("metrics_histograms_bytes"):
+            st.image(result.plots["metrics_histograms_bytes"], caption="Distribusi skor SSIM dan Aliran Optik di seluruh video.")
+        if baseline_result:
+            st.subheader("2.5. Analisis Komparatif (dengan Video Baseline)")
+            insertion_events_count = len([loc for loc in result.localizations if loc["event"] == "anomaly_insertion"])
+            st.info(f"Ditemukan **{insertion_events_count} peristiwa penyisipan** yang tidak ada di video baseline.", icon="🔎")
+
+    with tabs[2]:
+        st.header("Hasil Tahap 3: Investigasi Detail")
+        st.info(
+            "Inti analisis: mengkorelasikan temuan dan melakukan investigasi mendalam dengan metode pendukung (ELA dan SIFT+RANSAC).",
+            icon="🔬",
+        )
+        if result.statistical_summary:
+            st.subheader("📊 Ringkasan Statistik Investigasi")
+            col1, col2 = st.columns(2)
+            col1.metric("Total Anomali", result.statistical_summary["total_anomalies"])
+            col2.metric("Kluster Temporal", result.statistical_summary["temporal_clusters"])
+        if not result.localizations:
+            st.success("🎉 **Tidak Ditemukan Anomali Signifikan.**")
+        else:
+            st.warning(
+                f"🚨 Ditemukan **{len(result.localizations)} peristiwa anomali** yang signifikan:",
+                icon="🚨",
+            )
+            for i, loc in enumerate(result.localizations):
+                event_type = loc["event"].replace("anomaly_", "").capitalize()
+                confidence = loc.get("confidence", "T/A")
+                conf_emoji = "🟩" if confidence == "RENDAH" else "🟨" if confidence == "SEDANG" else "🟧" if confidence == "TINGGI" else "🟥"
+                with st.expander(
+                    f"{conf_emoji} **Peristiwa #{i+1}: {event_type}** @ {loc['start_ts']:.2f} - {loc['end_ts']:.2f} detik (Keyakinan: {confidence})",
+                    expanded=(i == 0),
+                ):
+                    col1, col2 = st.columns(2)
+                    col1.metric("Tipe Anomali", event_type)
+                    col2.metric("Durasi", f"{loc['end_ts'] - loc['start_ts']:.2f} detik")
+                    if loc.get("explanations"):
+                        st.markdown("### Penjelasan")
+                        for exp in loc["explanations"]:
+                            st.markdown(f"- {exp}")
+                    if loc.get("metrics"):
+                        metrics_df = pd.DataFrame([
+                            {"Metode": k.replace('_', ' ').title(), "Nilai": str(v)} for k, v in loc["metrics"].items()
+                        ])
+                        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+                    st.markdown("### 🖼️ Bukti Visual")
+                    visual_cols = st.columns(2)
+                    if loc.get("image_bytes"):
+                        visual_cols[0].image(loc["image_bytes"], caption=f"Frame #{loc.get('start_frame')}")
+                    if loc.get("ela_path_bytes"):
+                        visual_cols[1].image(loc["ela_path_bytes"], caption="Analisis ELA")
+                    if loc.get("sift_path_bytes"):
+                        st.image(loc.get("sift_path_bytes"), caption="Bukti Pencocokan Fitur SIFT+RANSAC", use_container_width=True)
+
+    with tabs[3]:
+        st.header("Hasil Tahap 4: Visualisasi & Lokalisasi")
+        st.info(
+            "Tahap ini menyajikan penilaian keandalan bukti dan mengelompokkan anomali menjadi peristiwa yang mudah dipahami.",
+            icon="📈",
+        )
+
+        with st.container(border=True):
+            st.subheader("🗺️ Peta Ringkas Anomali Temporal")
+            st.write(
+                "Peta ini memberikan ringkasan visual sederhana dari semua jenis anomali yang terdeteksi di sepanjang linimasa video (frame demi frame). Ini berguna untuk melihat pola mentah."
+            )
+            if result.plots.get("temporal_bytes"):
+                st.image(
+                    result.plots.get("temporal_bytes"),
+                    caption="Peta Anomali Temporal (Duplikasi, Penyisipan, Diskontinuitas).",
+                    use_container_width=True,
+                )
+            else:
+                st.warning("Peta ringkas anomali temporal tidak tersedia untuk ditampilkan.")
+
+        st.markdown("---")
+
+        with st.container(border=True):
+            st.subheader("📊 Peta Detail Lokalisasi Tampering")
+            st.write(
+                "Visualisasi ini menggabungkan anomali ke dalam 'peristiwa', menampilkan tingkat kepercayaan, dan menyediakan statistik ringkasan dalam satu dasbor komprehensif."
+            )
+            if result.plots.get("enhanced_localization_map_bytes"):
+                st.image(
+                    result.plots.get("enhanced_localization_map_bytes"),
+                    caption="Peta detail lokalisasi tampering dengan timeline, statistik, dan tingkat kepercayaan.",
+                    use_container_width=True,
+                )
+            else:
+                st.warning("Peta detail lokalisasi tidak tersedia untuk ditampilkan.")
+
+        st.markdown("---")
+
+        st.subheader("⚙️ Penilaian Kualitas Pipeline Forensik")
+        if hasattr(result, "pipeline_assessment") and result.pipeline_assessment:
+            for stage_id, assessment in result.pipeline_assessment.items():
+                st.markdown(
+                    f"""<div class=\"pipeline-stage-card\"><h4>{assessment['nama']}</h4><div style=\"display: flex; justify-content: space-between;\"><span>Status: <b>{assessment['status'].upper()}</b></span><span>Quality Score: <b>{assessment['quality_score']}%</b></span></div></div>""",
+                    unsafe_allow_html=True,
+                )
+                if assessment["issues"]:
+                    for issue in assessment["issues"]:
+                        st.warning(f"⚠️ {issue}")
+
+    with tabs[4]:
+        display_ferm_tab_content(result)
+
+    with tabs[5]:
+        st.header("Hasil Tahap 5: Laporan & Validasi")
+        st.info(
+            "Unduh laporan lengkap dalam satu file ZIP yang berisi laporan Markdown, PDF, DOCX, dan semua artefak.",
+            icon="📄",
+        )
+
+        if result.zip_report_path and Path(result.zip_report_path).exists():
+            zip_path = Path(result.zip_report_path)
+            zip_bytes = zip_path.read_bytes()
+            st.download_button(
+                label="📥 Unduh Laporan ZIP",
+                data=zip_bytes,
+                file_name=zip_path.name,
+                mime="application/zip",
+                use_container_width=True,
+                type="primary",
+            )
+        else:
+            st.warning("🛑 File ZIP laporan tidak tersedia. Pastikan pipeline 5 telah berjalan tanpa error.")
+
+        st.subheader("✅ Validasi Proses Analisis")
+        validation_data = {
+            "File Bukti": Path(result.video_path).name,
+            "Hash SHA-256": result.preservation_hash,
+            "Waktu Analisis (UTC)": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        ferm_concl = getattr(result, "forensic_evidence_matrix", {}).get("conclusion", {})
+        reliability = ferm_concl.get("reliability_assessment", "Tidak Dapat Ditentukan")
+        validation_data["Penilaian Reliabilitas FERM"] = reliability
+
+        validation_df = pd.DataFrame.from_dict(validation_data, orient="index", columns=["Detail"])
+        st.table(validation_df)
+
+        st.markdown("### 🎯 Kesimpulan Analisis")
+        st.info(f"Berdasarkan analisis FERM, penilaian reliabilitas bukti adalah: **{reliability}**.")
+
 # ======================= LOGIC FIX START =======================
 if selected_tab == "Analisis Baru":
     if run:
@@ -832,185 +1065,11 @@ if selected_tab == "Analisis Baru":
                         if hasattr(result, 'markdown_report_path') and result.markdown_report_path:
                              result.markdown_report_data = Path(result.markdown_report_path).read_bytes()
                             
-                    st.success("Analisis selesai. Hasil ditampilkan di bawah ini.")
-                    
-                    tab_titles = ["📄 **Tahap 1: Akuisisi & K-Means**", "📊 **Tahap 2: Analisis Temporal**", "🔬 **Tahap 3: Investigasi**", "📈 **Tahap 4: Visualisasi & Lokalisasi**", "🧠 **Analisis FERM**", "📥 **Tahap 5: Laporan**"]
-                    tabs = st.tabs(tab_titles)
-    
-                    with tabs[0]:
-                        st.header("Hasil Tahap 1: Akuisisi & Ekstraksi Fitur Dasar")
-                        st.info("Tujuan: Mengamankan bukti, mengekstrak metadata, menormalisasi frame, dan menerapkan **Metode Utama K-Means** untuk mengklasifikasikan adegan video.", icon="🛡️")
-                        st.subheader("1.1. Identifikasi dan Preservasi Bukti")
-                        c1, c2 = st.columns(2)
-                        c1.metric("Total Frame Dianalisis", result.summary.get('total_frames', 'T/A'))
-                        c2.write("**Hash Integritas (SHA-256)**"); c2.code(result.preservation_hash, language="bash")
-                        with st.expander("Tampilkan Metadata Video Lengkap"):
-                            for category, items in result.metadata.items():
-                                st.write(f"**{category}**")
-                                df = pd.DataFrame.from_dict(items, orient='index', columns=['Value'])
-                                st.table(df)
-                        st.subheader("1.2. Ekstraksi dan Normalisasi Frame")
-                        st.write("Setiap frame diekstrak dan dinormalisasi untuk konsistensi analisis.")
-                        if result.frames and hasattr(result.frames[0], 'comparison_bytes') and result.frames[0].comparison_bytes:
-                            st.image(result.frames[0].comparison_bytes, caption="Kiri: Original, Kanan: Normalized (Contrast-Enhanced)")
-                        st.subheader("1.3. Hasil Detail Analisis K-Means")
-                        st.write(f"Frame-frame dikelompokkan ke dalam **{len(result.kmeans_artifacts.get('clusters', []))} klaster** berdasarkan kemiripan warna.")
-                        if result.kmeans_artifacts.get('distribution_plot_bytes'):
-                            st.image(result.kmeans_artifacts['distribution_plot_bytes'], caption="Distribusi jumlah frame untuk setiap klaster warna.")
-                        st.write("**Eksplorasi Setiap Klaster:**")
-                        if result.kmeans_artifacts.get('clusters'):
-                            cluster_tabs = st.tabs([f"Klaster {c['id']}" for c in result.kmeans_artifacts.get('clusters', [])])
-                            for i, cluster_tab in enumerate(cluster_tabs):
-                                with cluster_tab:
-                                    cluster_data = result.kmeans_artifacts['clusters'][i]
-                                    st.metric("Jumlah Frame dalam Klaster Ini", f"{cluster_data['count']}")
-                                    c1, c2 = st.columns([1,2])
-                                    with c1:
-                                        st.write("**Palet Warna Dominan**")
-                                        if cluster_data.get('palette_bytes'): st.image(cluster_data['palette_bytes'])
-                                    with c2:
-                                        st.write("**Contoh Frame dari Klaster Ini (Gambar Asli)**")
-                                        if cluster_data.get('samples_montage_bytes'): st.image(cluster_data['samples_montage_bytes'])
-                        else:
-                            st.warning("Tidak ada data klaster K-Means yang dapat ditampilkan.")
-
-                    with tabs[1]:
-                        st.header("Hasil Tahap 2: Analisis Anomali Temporal")
-                        st.info("Tujuan: Menganalisis hubungan antar frame berurutan untuk mendeteksi diskontinuitas.", icon="📈")
-                        st.subheader("2.1. Visualisasi Klasterisasi Warna K-Means (Sepanjang Waktu)")
-                        st.write("Plot ini menunjukkan bagaimana setiap frame dikelompokkan ke dalam klaster warna tertentu. Lompatan yang tajam sering mengindikasikan perubahan adegan yang mendadak.")
-                        if result.plots.get('kmeans_temporal_bytes'):
-                            st.image(result.plots['kmeans_temporal_bytes'], caption="Lompatan vertikal yang tajam menandakan perubahan adegan mendadak.")
-                        st.subheader("2.2. Analisis Skor SSIM (Structural Similarity Index)")
-                        st.write("SSIM mengukur kemiripan struktural antara dua gambar. Penurunan drastis pada skor SSIM merupakan indikator kuat adanya diskontinuitas.")
-                        if result.plots.get('ssim_temporal_bytes'):
-                            st.image(result.plots['ssim_temporal_bytes'], caption="Penurunan tajam mengindikasikan diskontinuitas.")
-                        st.subheader("2.3. Analisis Magnitudo Aliran Optik")
-                        st.write("Aliran Optik mengukur gerakan piksel antar frame. Lonjakan besar dapat mengindikasikan perubahan adegan yang tiba-tiba atau transisi paksa.")
-                        if result.plots.get('optical_flow_temporal_bytes'):
-                            st.image(result.plots['optical_flow_temporal_bytes'], caption="Lonjakan menunjukkan perubahan mendadak atau pergerakan tidak wajar.")
-                        st.subheader("2.4. Distribusi Metrik Anomali")
-                        st.write("Histogram ini menunjukkan distribusi keseluruhan skor SSIM dan pergerakan Aliran Optik. Ini membantu mengidentifikasi apakah nilai-nilai anomali benar-benar menonjol dari perilaku normal video.")
-                        if result.plots.get('metrics_histograms_bytes'):
-                             st.image(result.plots['metrics_histograms_bytes'], caption="Distribusi skor SSIM dan Aliran Optik di seluruh video.")
-                        if baseline_result:
-                            st.subheader("2.5. Analisis Komparatif (dengan Video Baseline)")
-                            insertion_events_count = len([loc for loc in result.localizations if loc['event'] == 'anomaly_insertion'])
-                            st.info(f"Ditemukan **{insertion_events_count} peristiwa penyisipan** yang tidak ada di video baseline.", icon="🔎")
-
-                    with tabs[2]:
-                        st.header("Hasil Tahap 3: Investigasi Detail")
-                        st.info("Inti analisis: mengkorelasikan temuan dan melakukan investigasi mendalam dengan metode pendukung (ELA dan SIFT+RANSAC).", icon="🔬")
-                        if result.statistical_summary:
-                            st.subheader("📊 Ringkasan Statistik Investigasi")
-                            col1, col2 = st.columns(2)
-                            col1.metric("Total Anomali", result.statistical_summary['total_anomalies'])
-                            col2.metric("Kluster Temporal", result.statistical_summary['temporal_clusters'])
-                        if not result.localizations: 
-                            st.success("🎉 **Tidak Ditemukan Anomali Signifikan.**")
-                        else:
-                            st.warning(f"🚨 Ditemukan **{len(result.localizations)} peristiwa anomali** yang signifikan:", icon="🚨")
-                            for i, loc in enumerate(result.localizations):
-                                event_type = loc['event'].replace('anomaly_', '').capitalize()
-                                confidence = loc.get('confidence', 'T/A')
-                                conf_emoji = "🟩" if confidence == "RENDAH" else "🟨" if confidence == "SEDANG" else "🟧" if confidence == "TINGGI" else "🟥"
-                                with st.expander(f"{conf_emoji} **Peristiwa #{i+1}: {event_type}** @ {loc['start_ts']:.2f} - {loc['end_ts']:.2f} detik (Keyakinan: {confidence})", expanded=(i == 0)):
-                                    col1, col2 = st.columns(2)
-                                    col1.metric("Tipe Anomali", event_type)
-                                    col2.metric("Durasi", f"{loc['end_ts'] - loc['start_ts']:.2f} detik")
-                                    if show_simple_explanations and loc.get('explanations'):
-                                        for exp_type, exp_data in loc['explanations'].items():
-                                            if isinstance(exp_data, dict) and exp_data.get('simple_explanation'):
-                                                st.markdown(f'<div class="explanation-box">{exp_data["simple_explanation"]}</div>', unsafe_allow_html=True)
-                                    if show_technical_details and isinstance(loc.get('metrics'), dict) and loc['metrics']:
-                                        st.markdown("### 🔧 Detail Teknis")
-                                        metrics_df = pd.DataFrame([{'Metrik': k.replace('_', ' ').title(), 'Nilai': str(v)} for k, v in loc['metrics'].items()])
-                                        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-                                    st.markdown("### 🖼️ Bukti Visual")
-                                    visual_cols = st.columns(2)
-                                    if loc.get('image_bytes'): visual_cols[0].image(loc['image_bytes'], caption=f"Frame #{loc.get('start_frame')}")
-                                    if loc.get('ela_path_bytes'): visual_cols[1].image(loc['ela_path_bytes'], caption="Analisis ELA")
-                                    if loc.get('sift_path_bytes'): st.image(loc.get('sift_path_bytes'), caption="Bukti Pencocokan Fitur SIFT+RANSAC", use_container_width=True)
-
-                    with tabs[3]:
-                        st.header("Hasil Tahap 4: Visualisasi & Lokalisasi")
-                        st.info("Tahap ini menyajikan penilaian keandalan bukti dan mengelompokkan anomali menjadi peristiwa yang mudah dipahami.", icon="📈")
-                        
-                        # ======================= KEY NAME FIX START =======================
-                        with st.container(border=True):
-                            st.subheader("🗺️ Peta Ringkas Anomali Temporal")
-                            st.write("Peta ini memberikan ringkasan visual sederhana dari semua jenis anomali yang terdeteksi di sepanjang linimasa video (frame demi frame). Ini berguna untuk melihat pola mentah.")
-                            # Kunci yang benar adalah 'temporal_bytes', bukan 'anomaly_map_temporal_bytes'
-                            if result.plots.get('temporal_bytes'):
-                                st.image(result.plots.get('temporal_bytes'), caption="Peta Anomali Temporal (Duplikasi, Penyisipan, Diskontinuitas).", use_container_width=True)
-                            else:
-                                st.warning("Peta ringkas anomali temporal tidak tersedia untuk ditampilkan.")
-
-                        st.markdown("---")
-                        
-                        with st.container(border=True):
-                            st.subheader("📊 Peta Detail Lokalisasi Tampering")
-                            st.write("Visualisasi ini menggabungkan anomali ke dalam 'peristiwa', menampilkan tingkat kepercayaan, dan menyediakan statistik ringkasan dalam satu dasbor komprehensif.")
-                            if result.plots.get('enhanced_localization_map_bytes'):
-                                st.image(result.plots.get('enhanced_localization_map_bytes'), caption="Peta detail lokalisasi tampering dengan timeline, statistik, dan tingkat kepercayaan.", use_container_width=True)
-                            else:
-                                st.warning("Peta detail lokalisasi tidak tersedia untuk ditampilkan.")
-                        
-                        st.markdown("---")
-                        
-                        st.subheader("⚙️ Penilaian Kualitas Pipeline Forensik")
-                        if hasattr(result, 'pipeline_assessment') and result.pipeline_assessment:
-                            for stage_id, assessment in result.pipeline_assessment.items():
-                                st.markdown(f"""<div class="pipeline-stage-card"><h4>{assessment['nama']}</h4><div style="display: flex; justify-content: space-between;"><span>Status: <b>{assessment['status'].upper()}</b></span><span>Quality Score: <b>{assessment['quality_score']}%</b></span></div></div>""", unsafe_allow_html=True)
-                                if assessment['issues']:
-                                    for issue in assessment['issues']: st.warning(f"⚠️ {issue}")
-                        
-                    with tabs[4]:
-                        display_ferm_tab_content(result)
-                        
-                    # ====== Tab 5: Laporan & Validasi ======
-                with tabs[5]:
-                    st.header("Hasil Tahap 5: Laporan & Validasi")
-                    st.info(
-                        "Unduh laporan lengkap dalam satu file ZIP yang berisi laporan Markdown, PDF, DOCX, dan semua artefak.",
-                        icon="📄"
-                    )
-
-                    # ==== Download ZIP Report ====
-                    if result.zip_report_path and Path(result.zip_report_path).exists():
-                        zip_path = Path(result.zip_report_path)
-                        zip_bytes = zip_path.read_bytes()
-                        st.download_button(
-                            label="📥 Unduh Laporan ZIP",
-                            data=zip_bytes,
-                            file_name=zip_path.name,
-                            mime="application/zip",
-                            use_container_width=True,
-                            type="primary"
-                        )
-                    else:
-                        st.warning("🛑 File ZIP laporan tidak tersedia. Pastikan pipeline 5 telah berjalan tanpa error.")
-
-                    # ==== Validasi Proses Analisis ====
-                    st.subheader("✅ Validasi Proses Analisis")
-                    validation_data = {
-                        "File Bukti": Path(result.video_path).name,
-                        "Hash SHA-256": result.preservation_hash,
-                        "Waktu Analisis (UTC)": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    # Ambil kesimpulan FERM (jika ada)
-                    ferm_concl = getattr(result, "forensic_evidence_matrix", {}).get("conclusion", {})
-                    reliability = ferm_concl.get("reliability_assessment", "Tidak Dapat Ditentukan")
-                    validation_data["Penilaian Reliabilitas FERM"] = reliability
-
-                    validation_df = pd.DataFrame.from_dict(validation_data, orient="index", columns=["Detail"])
-                    st.table(validation_df)
-
-                    # ==== Kesimpulan Akhir ====
-                    st.markdown("### 🎯 Kesimpulan Analisis")
-                    st.info(f"Berdasarkan analisis FERM, penilaian reliabilitas bukti adalah: **{reliability}**.")
-
-                    # ====== END Tab 5 ======
+                    # Simpan hasil ke session_state agar tetap ditampilkan setelah interaksi
+                    st.session_state.analysis_result = result
+                    display_analysis_result(result, baseline_result)
+    elif st.session_state.get("analysis_result"):
+        display_analysis_result(st.session_state.analysis_result)
 
 # Logic to render the correct page based on the selected tab in the sidebar
 else: # This implicitly means selected_tab == "Riwayat Analisis"
