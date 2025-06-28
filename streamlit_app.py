@@ -229,8 +229,6 @@ if 'show_ferm_details' not in st.session_state:
     st.session_state.show_ferm_details = True
 if 'analysis_result' not in st.session_state:
     st.session_state.analysis_result = None
-if 'analysis_baseline' not in st.session_state:
-    st.session_state.analysis_baseline = None
 
 with st.sidebar:
     selected_tab = st.radio(
@@ -732,8 +730,13 @@ def display_ferm_tab_content(entry_or_result):
                         st.markdown(f'<div class="history-artifact-container"><img src="{img_data_b64}" alt="{title}"></div>', unsafe_allow_html=True)
 
 
+
+# Helper to display the analysis results tabs so they can be rerendered
 def display_analysis_result(result, baseline_result=None):
+    """Tampilkan tab hasil analisis setelah pipeline selesai."""
     st.success("Analisis selesai. Hasil ditampilkan di bawah ini.")
+
+
     tab_titles = [
         "📄 **Tahap 1: Akuisisi & K-Means**",
         "📊 **Tahap 2: Analisis Temporal**",
@@ -764,48 +767,7 @@ def display_analysis_result(result, baseline_result=None):
         if result.frames and hasattr(result.frames[0], "comparison_bytes") and result.frames[0].comparison_bytes:
             st.image(result.frames[0].comparison_bytes, caption="Kiri: Original, Kanan: Normalized (Contrast-Enhanced)")
         st.subheader("1.3. Hasil Detail Analisis K-Means")
-        st.write(f"Frame-frame dikelompokkan ke dalam **{len(result.kmeans_artifacts.get('clusters', []))} klaster** berdasarkan kemiripan warna.")
-        if result.kmeans_artifacts.get("distribution_plot_bytes"):
-            st.image(result.kmeans_artifacts["distribution_plot_bytes"], caption="Distribusi jumlah frame untuk setiap klaster warna.")
-        st.write("**Eksplorasi Setiap Klaster:**")
-        if result.kmeans_artifacts.get("clusters"):
-            cluster_tabs = st.tabs([f"Klaster {c['id']}" for c in result.kmeans_artifacts.get("clusters", [])])
-            for i, cluster_tab in enumerate(cluster_tabs):
-                with cluster_tab:
-                    cluster_data = result.kmeans_artifacts["clusters"][i]
-                    st.metric("Jumlah Frame dalam Klaster Ini", f"{cluster_data['count']}")
-                    c1, c2 = st.columns([1, 2])
-                    with c1:
-                        st.write("**Palet Warna Dominan**")
-                        if cluster_data.get("palette_bytes"):
-                            st.image(cluster_data["palette_bytes"])
-                    with c2:
-                        st.write("**Contoh Frame dari Klaster Ini (Gambar Asli)**")
-                        if cluster_data.get("samples_montage_bytes"):
-                            st.image(cluster_data["samples_montage_bytes"])
-        else:
-            st.warning("Tidak ada data klaster K-Means yang dapat ditampilkan.")
 
-    with tabs[1]:
-        st.header("Hasil Tahap 2: Analisis Anomali Temporal")
-        st.info(
-            "Tujuan: Menganalisis hubungan antar frame berurutan untuk mendeteksi diskontinuitas.",
-            icon="📈",
-        )
-        st.subheader("2.1. Visualisasi Klasterisasi Warna K-Means (Sepanjang Waktu)")
-        st.write("Plot ini menunjukkan bagaimana setiap frame dikelompokkan ke dalam klaster warna tertentu. Lompatan yang tajam sering mengindikasikan perubahan adegan yang mendadak.")
-        if result.plots.get("kmeans_temporal_bytes"):
-            st.image(result.plots["kmeans_temporal_bytes"], caption="Lompatan vertikal yang tajam menandakan perubahan adegan mendadak.")
-        st.subheader("2.2. Analisis Skor SSIM (Structural Similarity Index)")
-        st.write("SSIM mengukur kemiripan struktural antara dua gambar. Penurunan drastis pada skor SSIM merupakan indikator kuat adanya diskontinuitas.")
-        if result.plots.get("ssim_temporal_bytes"):
-            st.image(result.plots["ssim_temporal_bytes"], caption="Penurunan tajam mengindikasikan diskontinuitas.")
-        st.subheader("2.3. Analisis Magnitudo Aliran Optik")
-        st.write("Aliran Optik mengukur gerakan piksel antar frame. Lonjakan besar dapat mengindikasikan perubahan adegan yang tiba-tiba atau transisi paksa.")
-        if result.plots.get("optical_flow_temporal_bytes"):
-            st.image(result.plots["optical_flow_temporal_bytes"], caption="Lonjakan menunjukkan perubahan mendadak atau pergerakan tidak wajar.")
-        st.subheader("2.4. Distribusi Metrik Anomali")
-        st.write("Histogram ini menunjukkan distribusi keseluruhan skor SSIM dan pergerakan Aliran Optik. Ini membantu mengidentifikasi apakah nilai-nilai anomali benar-benar menonjol dari perilaku normal video.")
         if result.plots.get("metrics_histograms_bytes"):
             st.image(result.plots["metrics_histograms_bytes"], caption="Distribusi skor SSIM dan Aliran Optik di seluruh video.")
         if baseline_result:
@@ -827,7 +789,7 @@ def display_analysis_result(result, baseline_result=None):
         if not result.localizations:
             st.success("🎉 **Tidak Ditemukan Anomali Signifikan.**")
         else:
-            st.warning(f"🚨 Ditemukan **{len(result.localizations)} peristiwa anomali** yang signifikan:", icon="🚨")
+
             for i, loc in enumerate(result.localizations):
                 event_type = loc["event"].replace("anomaly_", "").capitalize()
                 confidence = loc.get("confidence", "T/A")
@@ -840,13 +802,7 @@ def display_analysis_result(result, baseline_result=None):
                     col1.metric("Tipe Anomali", event_type)
                     col2.metric("Durasi", f"{loc['end_ts'] - loc['start_ts']:.2f} detik")
                     if loc.get("explanations"):
-                        for exp_type, exp_data in loc["explanations"].items():
-                            if isinstance(exp_data, dict) and exp_data.get("simple_explanation"):
-                                st.markdown(f'<div class="explanation-box">{exp_data["simple_explanation"]}</div>', unsafe_allow_html=True)
-                    if loc.get("metrics"):
-                        st.markdown("### 🔧 Detail Teknis")
-                        metrics_df = pd.DataFrame([
-                            {"Metrik": k.replace("_", " ").title(), "Nilai": str(v)} for k, v in loc["metrics"].items()
+
                         ])
                         st.dataframe(metrics_df, use_container_width=True, hide_index=True)
                     st.markdown("### 🖼️ Bukti Visual")
@@ -864,6 +820,7 @@ def display_analysis_result(result, baseline_result=None):
             "Tahap ini menyajikan penilaian keandalan bukti dan mengelompokkan anomali menjadi peristiwa yang mudah dipahami.",
             icon="📈",
         )
+
         with st.container(border=True):
             st.subheader("🗺️ Peta Ringkas Anomali Temporal")
             st.write(
@@ -1052,14 +1009,6 @@ if selected_tab == "Analisis Baru":
                         if hasattr(result, 'markdown_report_path') and result.markdown_report_path:
                              result.markdown_report_data = Path(result.markdown_report_path).read_bytes()
 
-                    st.session_state.analysis_result = result
-                    st.session_state.analysis_baseline = baseline_result
-                    display_analysis_result(result, baseline_result)
-    elif st.session_state.analysis_result:
-        display_analysis_result(
-            st.session_state.analysis_result,
-            st.session_state.analysis_baseline,
-        )
 
 # Logic to render the correct page based on the selected tab in the sidebar
 else: # This implicitly means selected_tab == "Riwayat Analisis"
